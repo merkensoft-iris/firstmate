@@ -490,7 +490,7 @@ MODEL_JQ='
 '
 
 gather() {  # [<slug>] -> $TMP/model.json
-  local only=${1:-} ids id
+  local only=${1:-} ids id pids=()
   load_records
   if [ -n "$only" ]; then
     jq -e --arg s "$only" 'any(.[]; .ok and .record.slug == $s)' "$TMP/records.json" >/dev/null \
@@ -505,12 +505,20 @@ gather() {  # [<slug>] -> $TMP/model.json
     '($homes[0]) as $homes | ($records[0]) as $records | {} as $crew | '"$MODEL_JQ"'
      | [.initiatives[].members[] | select(.home == "main" and .state == "in_flight") | .task] | unique[]' \
     > "$TMP/inflight" || die "cannot classify initiative members"
-  : > "$TMP/crew.jsonl"
+  mkdir -p "$TMP/crew"
   ids=$(cat "$TMP/inflight")
   for id in $ids; do
     valid_task "$id" && [ -f "$STATE/$id.meta" ] || continue
-    FM_CREW_STATE_NO_FORGE=1 fm_run_timed "$TIMEOUT" "$CREW_STATE" "$id" 2>/dev/null < /dev/null | head -n 1 \
-      | jq -Rc --arg id "$id" '{($id):.}' >> "$TMP/crew.jsonl"
+    {
+      FM_CREW_STATE_NO_FORGE=1 fm_run_timed "$TIMEOUT" "$CREW_STATE" "$id" 2>/dev/null < /dev/null | head -n 1 \
+        | jq -Rc --arg id "$id" '{($id):.}' > "$TMP/crew/$id"
+    } &
+    pids+=("$!")
+  done
+  [ "${#pids[@]}" -eq 0 ] || wait "${pids[@]}"
+  : > "$TMP/crew.jsonl"
+  for id in $ids; do
+    [ -f "$TMP/crew/$id" ] && cat "$TMP/crew/$id" >> "$TMP/crew.jsonl"
   done
   jq -n --slurpfile homes "$TMP/homes.json" --slurpfile records "$TMP/records.json" \
     --slurpfile crewrows "$TMP/crew.jsonl" --arg now "$NOW" \
