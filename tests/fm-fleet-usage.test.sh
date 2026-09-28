@@ -116,14 +116,14 @@ test_markdown_table_rows_sort_and_unreachable() {
   make_fakes "$fakebin" "$log"
   out=$(run_usage "$home" "$fakebin" 2>"$TMP_ROOT/md.err"); rc=$?
   expect_code 0 "$rc" "table is produced even when one host is unreachable"
-  assert_contains "$out" '| host | mates | provider | account | 5h left | 5h resets | 5h pace | week left | week resets | week pace |' "markdown header"
-  assert_contains "$out" '| alpha | alpha1,alpha2 | claude | henry1@example.com | 20% | 2026-09-21 13:39 UTC | ahead | 66% | 2026-09-25 03:59 UTC | behind |' "alpha claude row with both windows in the local zone"
-  assert_contains "$out" '| beta | beta1 | claude | captain@example.com | 77% | 2026-09-21 15:20 UTC | behind | 55% | 2026-09-23 09:00 UTC | behind |' "beta claude row with a truncated percent"
-  assert_contains "$out" '| local | here1 | codex | captain@work.example | 78% | 2026-09-21 13:43 UTC | behind | 65% | 2026-09-27 04:32 UTC | ahead |' "local codex row"
-  assert_contains "$out" '| beta | beta1 | codex | captain@work.example | - | - | - | 65% | 2026-09-27 04:32 UTC | ahead |' "a missing five-hour window prints dashes, never a number"
-  assert_contains "$out" '| delta | delta1 | - | unreachable: ssh: connect to host delta port 22: Operation timed out | - | - | - | - | - | - |' "unreachable host is a row that says so"
+  assert_contains "$out" '| host | mates | provider | account | 5h left | 5h resets | 5h pace | week left | week resets | week pace | month left | month resets | other |' "markdown header keeps every earlier column and appends month and other"
+  assert_contains "$out" '| alpha | alpha1,alpha2 | claude | henry1@example.com | 20% | 2026-09-21 13:39 UTC | ahead | 66% | 2026-09-25 03:59 UTC | behind | - | - | - |' "alpha claude row with both windows in the local zone"
+  assert_contains "$out" '| beta | beta1 | claude | captain@example.com | 77% | 2026-09-21 15:20 UTC | behind | 55% | 2026-09-23 09:00 UTC | behind | - | - | - |' "beta claude row with a truncated percent"
+  assert_contains "$out" '| local | here1 | codex | captain@work.example | 78% | 2026-09-21 13:43 UTC | behind | 65% | 2026-09-27 04:32 UTC | ahead | - | - | - |' "local codex row"
+  assert_contains "$out" '| beta | beta1 | codex | captain@work.example | - | - | - | 65% | 2026-09-27 04:32 UTC | ahead | - | - | - |' "a missing five-hour window prints dashes, never a number"
+  assert_contains "$out" '| delta | delta1 | - | unreachable: ssh: connect to host delta port 22: Operation timed out | - | - | - | - | - | - | - | - | - |' "unreachable host is a row that says so"
   assert_not_contains "$out" 'model:fable' "model-scoped windows are not rows"
-  assert_not_contains "$out" 'cursor' "a provider with no session window and no verified account is omitted"
+  assert_not_contains "$out" 'cursor' "a provider with no window, no verified account, and no configured credential is omitted"
   assert_not_contains "$out" 'SECRET' "remedy text never reaches the output"
   assert_not_contains "$out" 'copilot' "attention for a provider nobody uses stays quiet"
   # Sort: five-hour remaining ascending, then rows without a window, then failures.
@@ -158,9 +158,9 @@ test_toon_output() {
   fakebin="$TMP_ROOT/toon-bin"; log="$TMP_ROOT/toon-ssh.log"
   make_fakes "$fakebin" "$log"
   out=$(run_usage "$home" "$fakebin" --toon 2>&1) || fail "--toon failed: $out"
-  assert_contains "$out" 'usage[5]{host,mates,provider,account,fiveHourLeft,fiveHourResetsAt,fiveHourPace,weekLeft,weekResetsAt,weekPace,read}:' "toon usage header with the row count"
-  assert_contains "$out" '  alpha,"alpha1,alpha2",claude,henry1@example.com,20,2026-09-21 13:39 UTC,ahead,66,2026-09-25 03:59 UTC,behind,ok' "toon row quotes a comma-bearing field"
-  assert_contains "$out" '  delta,delta1,-,unreachable: ssh: connect to host delta port 22: Operation timed out,-,-,-,-,-,-,failed' "toon unreachable row is marked failed"
+  assert_contains "$out" 'usage[5]{host,mates,provider,account,fiveHourLeft,fiveHourResetsAt,fiveHourPace,weekLeft,weekResetsAt,weekPace,read,monthLeft,monthResetsAt,other}:' "toon usage header with the row count and the month and other fields after read"
+  assert_contains "$out" '  alpha,"alpha1,alpha2",claude,henry1@example.com,20,2026-09-21 13:39 UTC,ahead,66,2026-09-25 03:59 UTC,behind,ok,-,-,-' "toon row quotes a comma-bearing field"
+  assert_contains "$out" '  delta,delta1,-,unreachable: ssh: connect to host delta port 22: Operation timed out,-,-,-,-,-,-,failed,-,-,-' "toon unreachable row is marked failed"
   assert_contains "$out" 'attention[3]{host,provider,kind,detail}:' "toon attention header"
   assert_contains "$out" '  alpha,claude,degraded_source,"oauth, refreshed late"' "toon attention detail is quoted"
   assert_not_contains "$out" '| host' "toon output carries no markdown table"
@@ -198,8 +198,72 @@ test_malformed_registry_and_bad_args_refuse() {
   pass "malformed registry and bad arguments refuse"
 }
 
+# make_kimi_fake <dir>: a local quota-axi whose report is shaped like a Pi-backed
+# Kimi between uses - a month-only window, a stale reading, and an
+# expired_refreshable credential - beside a no-window provider with a
+# configured credential, one with no attention row, and providers that were
+# never signed in.
+make_kimi_fake() {
+  local dir=$1
+  mkdir -p "$dir"
+  cat > "$dir/quota-axi" <<'SH'
+#!/usr/bin/env bash
+[ "$*" = "--full" ] || { echo "unexpected local args: $*" >&2; exit 99; }
+cat <<'T'
+attention[4]{provider,scope,kind,detail,remedy}:
+  kimi,all,stale,"last refreshed 2026-09-27T20:00:00.000Z · fetch failed pi_kimi_credential_expired (auth expired_refreshable)",quota-axi --provider kimi TOKEN
+  zai,all,no_quota,zai_quota_fetch_failed (auth usable),none
+  opencode-go,all,auth_required,opencode_go_credential_unavailable,none
+  cursor,all,error,sqlite3_unavailable,none
+providers[6]{provider,plan,source,status,authStatus,relationships,refreshedAt}:
+  claude,team,oauth,fresh,usable,known,"2026-09-28T06:00:00.000Z"
+  kimi,unknown,"pi:kimi-coding",stale,expired_refreshable,unknown,"2026-09-27T20:00:00.000Z"
+  zai,unknown,"pi:zai",error,usable,unknown,none
+  grok,unknown,auth-json,error,unknown,unknown,none
+  opencode-go,unknown,api,auth_required,unknown,partial,none
+  cursor,unknown,unavailable,error,unknown,unknown,none
+windows[4]{provider,id,label,percentRemaining,resetsAt,pace,reserve}:
+  claude,five_hour,session,38,"2026-09-28T08:39:59.560241+00:00",ahead,-10.8
+  claude,seven_day,week,55,"2026-10-03T16:59:59.560261+00:00",ahead,-22.8
+  kimi,month_total,month,75,"2026-10-24T00:00:00.000Z",unknown,unknown
+  kimi,month_code,code month,80,"2026-10-24T00:00:00.000Z",unknown,unknown
+accounts[3]{provider,email,organization,accountId,identityStatus}:
+  claude,me@example.com,Example,f9dd,verified
+  kimi,hidden,none,none,unknown
+  zai,hidden,none,none,unknown
+T
+SH
+  chmod 0755 "$dir/quota-axi"
+}
+
+test_month_only_stale_and_no_window_providers() {
+  local home fakebin out order
+  home="$TMP_ROOT/kimi"; mkdir -p "$home/data"
+  fakebin="$TMP_ROOT/kimi-bin"
+  make_kimi_fake "$fakebin"
+  out=$(run_usage "$home" "$fakebin" 2>&1) || fail "month-only run failed: $out"
+  assert_contains "$out" '| local | - | claude | me@example.com | 38% | 2026-09-28 08:39 UTC | ahead | 55% | 2026-10-03 16:59 UTC | ahead | - | - | - |' "a five-hour provider keeps its row beside the new columns"
+  assert_contains "$out" '| local | - | kimi | - | - | - | - | - | - | - | 75% | 2026-10-24 00:00 UTC | code month 80% |' "a month-only provider is present with its month window and its other window"
+  assert_contains "$out" '| local | - | zai | - | - | - | - | - | - | - | - | - | no window: zai_quota_fetch_failed (auth usable) |' "a configured provider with no window is a row carrying its reason"
+  assert_contains "$out" '| local | - | grok | - | - | - | - | - | - | - | - | - | no window: status error (auth unknown) |' "a no-window provider without an attention row carries its status as the reason"
+  order=$(printf '%s\n' "$out" | grep '^| ' | grep -Ev '^\| (host|---)' | awk -F'|' '{ gsub(/ /, "", $4); print $4 }' | paste -sd' ' -)
+  assert_equals 'claude kimi grok zai' "$order" "five-hour rows sort first, then other windows, then no-window rows"
+  assert_contains "$out" '- local kimi stale reading: last refreshed 2026-09-27T20:00:00.000Z · fetch failed pi_kimi_credential_expired (auth expired_refreshable)' "a stale reading is named in plain words"
+  assert_contains "$out" '- local kimi credential expired, refreshable: the stored sign-in expired between uses and renews on the next use' "an expired_refreshable credential is explained, not read as signed out"
+  assert_contains "$out" '- local zai no_quota: zai_quota_fetch_failed (auth usable)' "a no-window provider's attention row is listed"
+  assert_not_contains "$out" '- none' "attention is not empty while a present provider carries warnings"
+  assert_not_contains "$out" 'opencode-go' "a provider whose credential is missing stays out"
+  assert_not_contains "$out" 'cursor' "a provider with no configured source stays out"
+  assert_not_contains "$out" 'TOKEN' "remedy text never reaches the output"
+  out=$(run_usage "$home" "$fakebin" --toon 2>&1) || fail "month-only --toon failed: $out"
+  assert_contains "$out" '  local,-,kimi,-,-,-,-,-,-,-,ok,75,2026-10-24 00:00 UTC,code month 80%' "toon carries the month and other fields"
+  assert_contains "$out" '  local,kimi,stale reading,' "toon attention carries the plain stale wording"
+  pass "month-only, stale, expired-refreshable, and no-window providers"
+}
+
 test_markdown_table_rows_sort_and_unreachable
 test_one_connection_per_host_with_batch_mode
 test_toon_output
 test_absent_registry_reads_only_local
 test_malformed_registry_and_bad_args_refuse
+test_month_only_stale_and_no_window_providers

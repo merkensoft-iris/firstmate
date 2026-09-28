@@ -34,21 +34,31 @@
 #
 # Output contract (markdown, the default):
 #
-#   | host | mates | provider | account | 5h left | 5h resets | 5h pace | week left | week resets | week pace |
+#   | host | mates | provider | account | 5h left | 5h resets | 5h pace | week left | week resets | week pace | month left | month resets | other |
 #
 #   One row per host x provider. A provider is "present" on a host when its
-#   quota-axi report has a five_hour, seven_day, or weekly window row, or an
-#   account row whose identityStatus is `verified`; other providers are
-#   omitted. `account` is the email from the accounts row, or `-` when none.
+#   quota-axi report has any window row, or an account row whose
+#   identityStatus is `verified`, or a providers row that shows a configured
+#   credential: a source other than unavailable, unknown, or none with a
+#   status other than auth_required, or an authStatus of usable or
+#   expired_refreshable (a Kimi sign-in between uses). Other providers - never
+#   signed in, not installed - are omitted. A present provider with no window
+#   at all is still a row, with `-` in every window cell and its reason in
+#   `other` as `no window: <reason>`, where the reason is its first quota-axi
+#   attention detail, or its status and authStatus when it has none.
+#   `account` is the email from the accounts row, or `-` when none.
 #   `mates` lists the second mates the registry places on that host, `-` when
 #   the host (typically `local`) carries none.
 #   `5h` comes from the `five_hour` window; `week` from `seven_day` or
-#   `weekly`. `left` is percentRemaining as an integer percent, `resets` is the
+#   `weekly`; `month` from `month_total`, `monthly`, or `month`. `left` is percentRemaining as an integer percent, `resets` is the
 #   window's resetsAt rendered in the local zone as `YYYY-MM-DD HH:MM ZONE`,
 #   `pace` is the window's pace word (ahead, behind, on_pace, unknown). A
-#   missing window prints `-` in all three cells; no number is ever invented.
+#   missing window prints `-` in all of its cells; no number is ever invented.
+#   `other` lists every remaining window that is not model-scoped as
+#   `<label> <left>%` joined by `; `, or `-` when there is none.
 #   Rows are sorted by `5h left` ascending, numeric rows first, then rows with
-#   no five-hour window, then the read failures. A host whose read failed is
+#   a window but no five-hour one, then rows with no window, then the read
+#   failures. A host whose read failed is
 #   still a row: provider `-`, account `unreachable: <first stderr line>` (or
 #   `timed out after Ns`, or `no quota-axi output`), and `-` elsewhere.
 #
@@ -58,18 +68,24 @@
 #   provider present on some other host unless the row only says it is not
 #   signed in here (`auth_required`). An unmeasurable Claude on this laptop is
 #   therefore named, while a mate that never signed into Codex and providers
-#   nobody uses anywhere stay quiet. Only the kind and detail are ever printed;
+#   nobody uses anywhere stay quiet. A quota-axi `stale` kind prints as
+#   `stale reading`, and a present provider whose authStatus is
+#   expired_refreshable adds a `credential expired, refreshable` row saying the
+#   stored sign-in expired between uses and renews on the next use, so a
+#   usable provider is never read as signed out. Only the kind and detail are
+#   ever printed;
 #   remedy text, tokens, file contents, and every other quota-axi section stay
 #   out of the output. The section prints `- none` when there is nothing to
 #   report.
 #
 # With --toon the same data prints as TOON for agents:
 #
-#   usage[N]{host,mates,provider,account,fiveHourLeft,fiveHourResetsAt,fiveHourPace,weekLeft,weekResetsAt,weekPace,read}:
+#   usage[N]{host,mates,provider,account,fiveHourLeft,fiveHourResetsAt,fiveHourPace,weekLeft,weekResetsAt,weekPace,read,monthLeft,monthResetsAt,other}:
 #   attention[M]{host,provider,kind,detail}:
 #
 #   `read` is `ok` or `failed`; a failed row carries the failure text in
-#   `account` exactly as the markdown does. Values containing a comma, quote,
+#   `account` exactly as the markdown does. The month and other fields follow
+#   `read` so a positional reader of the earlier fields is unaffected. Values containing a comma, quote,
 #   or surrounding space are double-quoted with inner quotes doubled.
 #
 # Exit status is 0 whenever the table was produced, even when some hosts failed
@@ -96,7 +112,7 @@ HOST_TIMEOUT=${FM_FLEET_USAGE_TIMEOUT:-60}
 CONNECT_TIMEOUT=${FM_SSH_CONNECT_TIMEOUT:-10}
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,77p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 2; }
 
 for v in PARALLEL HOST_TIMEOUT CONNECT_TIMEOUT; do
   case "${!v}" in ''|*[!0-9]*|0) die "$v must be a positive integer: ${!v}" ;; esac
@@ -227,7 +243,7 @@ toon_rows() {  # <file> <section>
 # Internal record files use the ASCII unit separator so an empty field survives
 # `read` (a tab-separated empty field would collapse).
 US=$(printf '\037')
-# rows: sortkey US host US mates US provider US account US 5h US 5h_reset US 5h_pace US wk US wk_reset US wk_pace US read
+# rows: sortkey US host US mates US provider US account US 5h US 5h_reset US 5h_pace US wk US wk_reset US wk_pace US read US mo US mo_reset US other
 # attention: host US provider US kind US detail
 : > "$TMP/rows"
 : > "$TMP/attention"
@@ -245,35 +261,49 @@ for i in "${!HOST_ORDER[@]}"; do
     failure="no quota-axi output"
   fi
   if [ -n "$failure" ]; then
-    printf '2%s%s%s%s%s-%s%s%s-%s-%s-%s-%s-%s-%sfailed\n' "$US" "$host" "$US" "$mates" "$US" "$US" "$failure" "$US" "$US" "$US" "$US" "$US" "$US" "$US" >> "$TMP/rows"
+    printf '3%s%s%s%s%s-%s%s%s-%s-%s-%s-%s-%s-%sfailed%s-%s-%s-\n' "$US" "$host" "$US" "$mates" "$US" "$US" "$failure" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" "$US" >> "$TMP/rows"
     printf '%s%s-%sread_failed%s%s\n' "$host" "$US" "$US" "$US" "$failure" >> "$TMP/attention"
     continue
   fi
   toon_rows "$dir/out" windows > "$dir/windows"
   toon_rows "$dir/out" accounts > "$dir/accounts"
   toon_rows "$dir/out" attention > "$dir/attention"
-  # Present providers, in first-seen order: a five-hour or weekly window, or a verified account.
-  { awk -F"$US" '$2 == "five_hour" || $2 == "seven_day" || $2 == "weekly" { print $1 }' "$dir/windows"
-    awk -F"$US" '$5 == "verified" { print $1 }' "$dir/accounts"; } | awk 'NF && !seen[$0]++' > "$dir/present"
+  toon_rows "$dir/out" providers > "$dir/providers"
+  # Present providers, in first-seen order: any window, a verified account, or
+  # a providers row showing a configured credential (see the header).
+  { awk -F"$US" '{ print $1 }' "$dir/windows"
+    awk -F"$US" '$5 == "verified" { print $1 }' "$dir/accounts"
+    awk -F"$US" '($3 != "unavailable" && $3 != "unknown" && $3 != "none" && $3 != "" && $4 != "auth_required") || $5 == "usable" || $5 == "expired_refreshable" { print $1 }' "$dir/providers"
+  } | awk 'NF && !seen[$0]++' > "$dir/present"
   cat "$dir/present" >> "$TMP/present"
   while IFS= read -r provider; do
     acct=$(awk -F"$US" -v p="$provider" '$1 == p { print $2; exit }' "$dir/accounts")
     case "$acct" in ''|hidden|none) acct=- ;; esac
-    h_left=-; h_reset=-; h_pace=-; w_left=-; w_reset=-; w_pace=-
-    while IFS="$US" read -r _ id _ pct reset pace _; do
+    h_left=-; h_reset=-; h_pace=-; w_left=-; w_reset=-; w_pace=-; m_left=-; m_reset=-; other=; windows=0
+    while IFS="$US" read -r _ id label pct reset pace _; do
       [ -n "$id" ] || continue
+      windows=1
       case "$pct" in ''|*[!0-9.]*) pct=- ;; *) pct=${pct%%.*} ;; esac
       [ -n "$pace" ] || pace=-
       case "$reset" in ''|none|unknown) reset=- ;; *) reset=$(local_time "$reset") ;; esac
       case "$id" in
         five_hour) h_left=$pct; h_reset=$reset; h_pace=$pace ;;
         seven_day|weekly) w_left=$pct; w_reset=$reset; w_pace=$pace ;;
+        month_total|monthly|month) m_left=$pct; m_reset=$reset ;;
+        model:*) ;;
+        *) [ "$pct" = - ] || pct="${pct}%"; other="${other:+$other; }${label:-$id} $pct" ;;
       esac
-    done < <(awk -F"$US" -v p="$provider" '$1 == p && ($2 == "five_hour" || $2 == "seven_day" || $2 == "weekly")' "$dir/windows")
-    if [ "$h_left" = - ]; then key=1; else key=0; fi
-    printf '%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%sok\n' \
+    done < <(awk -F"$US" -v p="$provider" '$1 == p' "$dir/windows")
+    if [ "$h_left" != - ]; then key=0; elif [ "$windows" = 1 ]; then key=1; else
+      key=2
+      reason=$(awk -F"$US" -v p="$provider" '$1 == p && $4 != "" { print $4; exit }' "$dir/attention")
+      [ -n "$reason" ] || reason=$(awk -F"$US" -v p="$provider" '$1 == p { print "status " $4 " (auth " $5 ")"; exit }' "$dir/providers")
+      other="no window: ${reason:-no measurable window}"
+    fi
+    printf '%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%sok%s%s%s%s%s%s\n' \
       "$key" "$US" "$host" "$US" "$mates" "$US" "$provider" "$US" "$acct" "$US" \
-      "$h_left" "$US" "$h_reset" "$US" "$h_pace" "$US" "$w_left" "$US" "$w_reset" "$US" "$w_pace" "$US" >> "$TMP/rows"
+      "$h_left" "$US" "$h_reset" "$US" "$h_pace" "$US" "$w_left" "$US" "$w_reset" "$US" "$w_pace" "$US" \
+      "$US" "$m_left" "$US" "$m_reset" "$US" "${other:--}" >> "$TMP/rows"
   done < "$dir/present"
 done
 
@@ -282,6 +312,7 @@ done
 # not signed in here (auth_required). A fleet provider that is unmeasurable on
 # one host is therefore named, while a mate that simply never signed into a
 # provider the laptop uses, and providers nobody uses anywhere, stay quiet.
+# A present provider whose credential expired between uses says so plainly.
 awk 'NF && !seen[$0]++' "$TMP/present" > "$TMP/fleet-present"
 for i in "${!HOST_ORDER[@]}"; do
   host=${HOST_ORDER[$i]}; dir="$TMP/h/$host"
@@ -292,23 +323,31 @@ for i in "${!HOST_ORDER[@]}"; do
       grep -qx -- "$provider" "$TMP/fleet-present" || continue
       [ "$kind" != auth_required ] || continue
     fi
+    [ "$kind" != stale ] || kind="stale reading"
     printf '%s%s%s%s%s%s%s\n' "$host" "$US" "$provider" "$US" "$kind" "$US" "$detail" >> "$TMP/attention"
   done < "$dir/attention"
+  while IFS="$US" read -r provider _ _ _ auth _; do
+    [ "$auth" = expired_refreshable ] || continue
+    grep -qx -- "$provider" "$dir/present" || continue
+    printf '%s%s%s%scredential expired, refreshable%sthe stored sign-in expired between uses and renews on the next use\n' "$host" "$US" "$provider" "$US" "$US" >> "$TMP/attention"
+  done < "$dir/providers"
 done
 
-# Sort: numeric five-hour rows ascending, then rows without a window, then failures.
+# Sort: numeric five-hour rows ascending, then rows with other windows, then
+# rows with no window, then failures.
 sort -t "$US" -k1,1n -k6,6n -k2,2 "$TMP/rows" > "$TMP/sorted"
 
 # --- render -------------------------------------------------------------------
 if [ "$FORMAT" = toon ]; then
   n=$(grep -c . "$TMP/sorted" || true)
-  printf 'usage[%s]{host,mates,provider,account,fiveHourLeft,fiveHourResetsAt,fiveHourPace,weekLeft,weekResetsAt,weekPace,read}:\n' "$n"
-  while IFS="$US" read -r _ host mates provider acct hl hr hp wl wr wp read; do
+  printf 'usage[%s]{host,mates,provider,account,fiveHourLeft,fiveHourResetsAt,fiveHourPace,weekLeft,weekResetsAt,weekPace,read,monthLeft,monthResetsAt,other}:\n' "$n"
+  while IFS="$US" read -r _ host mates provider acct hl hr hp wl wr wp read ml mr other; do
     [ -n "$host" ] || continue
-    printf '  %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+    printf '  %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
       "$(toon_quote "$host")" "$(toon_quote "$mates")" "$(toon_quote "$provider")" "$(toon_quote "$acct")" \
       "$(toon_quote "$hl")" "$(toon_quote "$hr")" "$(toon_quote "$hp")" \
-      "$(toon_quote "$wl")" "$(toon_quote "$wr")" "$(toon_quote "$wp")" "$(toon_quote "$read")"
+      "$(toon_quote "$wl")" "$(toon_quote "$wr")" "$(toon_quote "$wp")" "$(toon_quote "$read")" \
+      "$(toon_quote "$ml")" "$(toon_quote "$mr")" "$(toon_quote "$other")"
   done < "$TMP/sorted"
   m=$(grep -c . "$TMP/attention" || true)
   printf 'attention[%s]{host,provider,kind,detail}:\n' "$m"
@@ -319,16 +358,18 @@ if [ "$FORMAT" = toon ]; then
   exit 0
 fi
 
-printf '| host | mates | provider | account | 5h left | 5h resets | 5h pace | week left | week resets | week pace |\n'
-printf '| --- | --- | --- | --- | ---: | --- | --- | ---: | --- | --- |\n'
-while IFS="$US" read -r _ host mates provider acct hl hr hp wl wr wp _; do
+printf '| host | mates | provider | account | 5h left | 5h resets | 5h pace | week left | week resets | week pace | month left | month resets | other |\n'
+printf '| --- | --- | --- | --- | ---: | --- | --- | ---: | --- | --- | ---: | --- | --- |\n'
+while IFS="$US" read -r _ host mates provider acct hl hr hp wl wr wp _ ml mr other; do
   [ -n "$host" ] || continue
-  hl_cell=$hl; wl_cell=$wl
+  hl_cell=$hl; wl_cell=$wl; ml_cell=$ml
   [ "$hl" = - ] || hl_cell="${hl}%"
   [ "$wl" = - ] || wl_cell="${wl}%"
-  printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
+  [ "$ml" = - ] || ml_cell="${ml}%"
+  printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
     "$(md_cell "$host")" "$(md_cell "${mates:--}")" "$(md_cell "$provider")" "$(md_cell "$acct")" \
-    "$hl_cell" "$(md_cell "$hr")" "$(md_cell "$hp")" "$wl_cell" "$(md_cell "$wr")" "$(md_cell "$wp")"
+    "$hl_cell" "$(md_cell "$hr")" "$(md_cell "$hp")" "$wl_cell" "$(md_cell "$wr")" "$(md_cell "$wp")" \
+    "$ml_cell" "$(md_cell "$mr")" "$(md_cell "$other")"
 done < "$TMP/sorted"
 printf '\n## attention\n\n'
 if [ -s "$TMP/attention" ]; then
