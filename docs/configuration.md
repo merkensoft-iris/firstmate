@@ -10,7 +10,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Firstmate's code, private files, or project location | [FM_HOME](#fm_home) and [operational home layout](#operational-home-layout-and-state) |
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
 | Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
-| Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
+| Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [initiative trackers](#initiative-trackers-datainitiatives), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
@@ -78,6 +78,7 @@ Each effective `FM_HOME` contains private operational directories.
 - Project and secondmate registries.
 - Captain preferences and optional shared captain preferences.
 - Learnings, backlog, briefs, and scout reports.
+- Initiative trackers under `data/initiatives/` ([schema](#initiative-trackers-datainitiatives)).
 - Explicitly installed content-addressed extension packages under `data/extensions/packages/`.
 
 `state/` holds runtime records:
@@ -622,6 +623,59 @@ Fleet-local operational facts and gotchas live locally in `data/learnings.md`; i
 The file is created lazily on first learning and follows the internal [`stow` skill's](../.agents/skills/stow/SKILL.md) aging-tier and cold-archive contract: inspect the current file first and curate it instead of appending forever.
 
 There is no shared learnings file by captain decision.
+
+## Initiative trackers (data/initiatives/)
+
+An initiative gathers related tasks under one name, so its status can be pulled up at any time across this home and every registered second mate.
+Each initiative is one private, gitignored JSON record at `data/initiatives/<slug>.json`.
+[`bin/fm-initiative.sh`](../bin/fm-initiative.sh) is the only writer, and its header owns the commands, the cross-home gatherer, the member states, and the list, drill-down, and board views.
+
+### Record schema
+
+```json
+{
+  "schema": "fm-initiative.v1",
+  "slug": "payments",
+  "name": "Payments revamp",
+  "goal": "Take card payments end to end",
+  "owner": "captain",
+  "status": "active",
+  "created": "2026-09-28",
+  "members": [
+    {"task": "shop-webhook-k2", "home": "main", "added": "2026-09-28"},
+    {"task": "ledger-export-p4", "home": "ledger", "added": "2026-09-28"}
+  ],
+  "refresh": null
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | Always `fm-initiative.v1`; a record with any other value is reported as unreadable, never guessed at. |
+| `slug` | The file's basename: lowercase letters, digits, dot, dash, or underscore, at most 64 characters. |
+| `name`, `goal`, `owner` | One line each; `owner` is free text and defaults to `captain`. |
+| `status` | `active` or `closed`; the default list shows only active initiatives. |
+| `created` | The UTC date the record was created. |
+| `members[]` | Explicit members: a backlog task id plus its home, which is `main` for the home holding the record or a second mate id from that home's `data/secondmates.md`. |
+| `members[].observed` | Reserved for the automatic refresh; absent in this version. When present it is `{"state": ..., "at": ...}`, the member's last recorded state, shown only while that member's home cannot be reached. |
+| `refresh` | Reserved for the automatic refresh; `null` in this version. When present it is `{"at": ..., "by": ...}`, the time and writer of the last automatic refresh. |
+
+Writers preserve every field they do not own, so a later writer can add fields without a schema change.
+Changing the meaning of an existing field requires a new schema version.
+Writes are atomic replacements under `state/.initiatives.lock`.
+
+### Tagging a task when it is filed
+
+A task joins an initiative without a record edit when its backlog body carries a line `initiative: <slug>`, with several slugs separated by commas.
+Add the tag when filing, for example `bin/fm-tasks-axi.sh add <id> "<title>" --body "initiative: <slug>"`; tasks-axi stores the body unchanged.
+The gatherer reads tags from the backlog and done archive of every home it can reach, so a tagged task in an unreachable home stays unseen until that home answers, and the views say which homes they could not reach.
+Use `bin/fm-initiative.sh add` for a task that already exists, because `tasks-axi update --body` replaces the whole body.
+
+### Refresh
+
+Every view is gathered on demand, and nothing refreshes a record automatically in this version.
+The planned follow-up is a hook in `bin/fm-spawn.sh` and `bin/fm-teardown.sh` that, when a member task starts or finishes, writes `refresh` and that member's `observed` under the same lock.
+Both fields already exist in `fm-initiative.v1`, so that hook needs no format change.
 
 ## Startup memory budget (config/startup-memory-budget)
 

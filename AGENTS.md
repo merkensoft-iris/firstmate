@@ -99,6 +99,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   learnings.md       fleet-local operational facts and gotchas; LOCAL, gitignored; dated, evidence-backed, curated, and updated with inspect-then-update - rewrite and prune rather than append forever, the same contract as captain.md; created lazily, absent until this home has a learning to store
   projects.md        thin fleet navigation registry recording each project's standing delivery posture and optional ship-branch prefix; firstmate-private, parsed by fm-project-mode.sh (section 6)
   secondmates.md      local and remote secondmate routing table; firstmate-private, maintained by the secondmate seed helpers (section 6)
+  initiatives/<slug>.json  named initiative trackers written only by bin/fm-initiative.sh; schema in docs/configuration.md "Initiative trackers" (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
 projects/            cloned repos; gitignored; read-only except under hard rule 1's concrete captain-approved project operation exception
@@ -292,6 +293,7 @@ A crewmate creates or updates it lazily through the project's selected delivery 
 Keep fleet delivery posture and captain-private strategy out of project memory.
 When the captain invokes `/stow`, load the `stow` skill for its memory curation, knowledge routing, and persistence of the open work records this session is holding; it files and corrects only the open work that session is holding, and never reconciles the backlog against repository or PR reality.
 When the captain invokes `/fleet-usage` or asks for the LLM usage across the second mates or which account each mate is signed into, load the `fleet-usage` skill, which runs `bin/fm-fleet-usage.sh` once and relays its table.
+When the captain invokes `/initiatives`, asks to start, extend, list, or drill into an initiative (a named group of tasks tracked across homes), or places a task being filed in one, load the `initiatives` skill.
 
 ## 7. Task lifecycle
 

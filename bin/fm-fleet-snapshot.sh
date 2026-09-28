@@ -234,6 +234,7 @@ usage() {
   cat <<'EOF'
 usage: fm-fleet-snapshot.sh --json
        fm-fleet-snapshot.sh --secondmate-home-summary
+       fm-fleet-snapshot.sh --backlog-records <file>
 
 Print a structured snapshot of the firstmate fleet.
 JSON is the stable machine-readable output contract. The default snapshot
@@ -241,6 +242,10 @@ refreshes only its parent-side remote-summary cache as an observational side eff
 
 --contribution-input emits the canonical local backlog/tasks ownership pair only,
 without worker observations or cross-home collection.
+
+--backlog-records <file> emits only the canonical backlog object (the backlog
+field above) parsed from that markdown file, reading nothing else, so a copy
+fetched from another home goes through this one parser (bin/fm-initiative.sh).
 
 --secondmate-home-summary emits the bounded structured summary used after a
 validated registered-home handoff. It is local-only, skips nested secondmate
@@ -291,6 +296,11 @@ case "${1:---json}" in
   --json) ;;
   --secondmate-home-summary) OUTPUT_MODE=secondmate-home-summary ;;
   --contribution-input) OUTPUT_MODE=contribution-input ;;
+  --backlog-records)
+    [ -n "${2:-}" ] || { usage >&2; exit 2; }
+    OUTPUT_MODE='backlog-records'
+    BACKLOG_RECORDS_INPUT=$2
+    ;;
   -h|--help) usage; exit 0 ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -1972,6 +1982,10 @@ scout_report_lines() {
     | jq -s 'sort_by(.id)'
 }
 
+if [ "$OUTPUT_MODE" = backlog-records ]; then
+  backlog_json "$BACKLOG_RECORDS_INPUT" || { echo "fm-fleet-snapshot: backlog read failed" >&2; exit 1; }
+  exit 0
+fi
 BACKLOG_JSON=$(backlog_json) || { echo "fm-fleet-snapshot: backlog read failed" >&2; exit 1; }
 contribution_tasks_json() {
   local meta id merge_authority
