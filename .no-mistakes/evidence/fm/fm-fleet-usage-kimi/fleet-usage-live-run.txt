@@ -1,0 +1,24 @@
+=== markdown ===
+| host | mates | provider | account | 5h left | 5h resets | 5h pace | week left | week resets | week pace | month left | month resets | other |
+| --- | --- | --- | --- | ---: | --- | --- | ---: | --- | --- | ---: | --- | --- |
+| local | - | claude | me@example.com | 38% | 2026-09-28 08:39 UTC | ahead | 55% | 2026-10-03 16:59 UTC | ahead | - | - | - |
+| local | - | kimi | - | - | - | - | - | - | - | 75% | 2026-10-24 00:00 UTC | code month 80% |
+| local | - | grok | - | - | - | - | - | - | - | - | - | no window: status error (auth unknown) |
+| local | - | zai | - | - | - | - | - | - | - | - | - | no window: zai_quota_fetch_failed (auth usable) |
+
+## attention
+
+- local kimi stale reading: last refreshed 2026-09-27T20:00:00.000Z · fetch failed pi_kimi_credential_expired (auth expired_refreshable)
+- local zai no_quota: zai_quota_fetch_failed (auth usable)
+- local kimi credential expired, refreshable: the stored sign-in expired between uses and renews on the next use
+
+=== toon ===
+usage[4]{host,mates,provider,account,fiveHourLeft,fiveHourResetsAt,fiveHourPace,weekLeft,weekResetsAt,weekPace,read,monthLeft,monthResetsAt,other}:
+  local,-,claude,me@example.com,38,2026-09-28 08:39 UTC,ahead,55,2026-10-03 16:59 UTC,ahead,ok,-,-,-
+  local,-,kimi,-,-,-,-,-,-,-,ok,75,2026-10-24 00:00 UTC,code month 80%
+  local,-,grok,-,-,-,-,-,-,-,ok,-,-,no window: status error (auth unknown)
+  local,-,zai,-,-,-,-,-,-,-,ok,-,-,no window: zai_quota_fetch_failed (auth usable)
+attention[3]{host,provider,kind,detail}:
+  local,kimi,stale reading,last refreshed 2026-09-27T20:00:00.000Z · fetch failed pi_kimi_credential_expired (auth expired_refreshable)
+  local,zai,no_quota,zai_quota_fetch_failed (auth usable)
+  local,kimi,"credential expired, refreshable",the stored sign-in expired between uses and renews on the next use
