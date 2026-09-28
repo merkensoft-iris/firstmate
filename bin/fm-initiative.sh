@@ -43,7 +43,8 @@
 # concurrently, and every read is bounded by FM_INITIATIVE_TIMEOUT seconds.
 # Both backlog files are parsed by `bin/fm-fleet-snapshot.sh --backlog-records`,
 # the one backlog parser. For an in-flight task in this home the current worker
-# state comes from bin/fm-crew-state.sh (forge reads disabled), bounded the same.
+# state comes from bin/fm-crew-state.sh (forge reads disabled); these per-task
+# reads also run concurrently, each bounded the same.
 #
 # A home that cannot be read is never dropped: it is listed as unreachable with
 # its reason, and each member there resolves to `unreachable` (with the member's
