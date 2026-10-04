@@ -24,6 +24,7 @@
 #
 # Environment:
 #   FM_HOME / FM_DATA_OVERRIDE   home whose data/secondmates.md is read
+#   FM_CONFIG_OVERRIDE           config directory (default: $FM_HOME/config)
 #   FM_SSH_BIN                   ssh executable (default: ssh)
 #   FM_QUOTA_AXI                 local quota-axi executable (default: quota-axi)
 #   FM_FLEET_USAGE_REMOTE_CMD    command run over ssh (default: quota-axi --full)
@@ -31,6 +32,12 @@
 #   FM_FLEET_USAGE_TIMEOUT       per-host wall bound in seconds (default: 60)
 #   FM_SSH_CONNECT_TIMEOUT       ssh ConnectTimeout in seconds (default: 10)
 #   TZ                           reset times are rendered in this zone
+#
+# Provider exclusion: config/fleet-usage-exclude-providers (optional, gitignored)
+# lists one provider name per line, matched case-insensitively; blank lines and
+# `#` comments are ignored. An excluded provider is dropped everywhere - table
+# rows, --toon rows, and attention lines, whichever host reports it. An absent
+# file excludes nothing. Read failures are never excluded.
 #
 # Output contract (markdown, the default):
 #
@@ -98,6 +105,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 REGISTRY="$DATA/secondmates.md"
+EXCLUDE_FILE="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/fleet-usage-exclude-providers"
 
 # shellcheck source=bin/fm-secondmate-registry-lib.sh
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
@@ -239,6 +247,12 @@ toon_rows() {  # <file> <section>
     }' "$1"
 }
 
+# Excluded providers, lowercased one per line; comments and blanks dropped.
+: > "$TMP/exclude"
+if [ -f "$EXCLUDE_FILE" ]; then
+  sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$EXCLUDE_FILE" | tr '[:upper:]' '[:lower:]' | awk 'NF' > "$TMP/exclude"
+fi
+
 # --- per-host extraction ------------------------------------------------------
 # Internal record files use the ASCII unit separator so an empty field survives
 # `read` (a tab-separated empty field would collapse).
@@ -274,7 +288,7 @@ for i in "${!HOST_ORDER[@]}"; do
   { awk -F"$US" '{ print $1 }' "$dir/windows"
     awk -F"$US" '$5 == "verified" { print $1 }' "$dir/accounts"
     awk -F"$US" '($3 != "unavailable" && $3 != "unknown" && $3 != "none" && $3 != "" && $4 != "auth_required") || $5 == "usable" || $5 == "expired_refreshable" { print $1 }' "$dir/providers"
-  } | awk 'NF && !seen[$0]++' > "$dir/present"
+  } | awk -v ex="$TMP/exclude" 'BEGIN { while ((getline l < ex) > 0) skip[l] = 1 } NF && !seen[$0]++ && !(tolower($0) in skip)' > "$dir/present"
   cat "$dir/present" >> "$TMP/present"
   while IFS= read -r provider; do
     acct=$(awk -F"$US" -v p="$provider" '$1 == p { print $2; exit }' "$dir/accounts")

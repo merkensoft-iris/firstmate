@@ -566,6 +566,14 @@ See [`trace-context.md`](trace-context.md) for carrier semantics, supported rout
 
 See [`fleet-ledger.md`](fleet-ledger.md) for the opt-in setup, record contract, and limits.
 
+## Fleet usage provider exclusion (config/fleet-usage-exclude-providers)
+
+Optional, LOCAL, and gitignored.
+List one provider name per line to drop that provider from `bin/fm-fleet-usage.sh`: its table rows, its `--toon` rows, and its attention lines on every host.
+Names match case-insensitively; blank lines and `#` comments are ignored.
+An absent file keeps every provider, and read failures are never excluded.
+The script header owns the exact contract.
+
 ## Turn-end pane-churn absorb (config/turnend-churn-absorb)
 
 The optional local, gitignored `config/turnend-churn-absorb` presence flag opts this home into a default-off third form of positive work evidence in watcher triage.

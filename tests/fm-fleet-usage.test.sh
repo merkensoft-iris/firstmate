@@ -261,7 +261,28 @@ test_month_only_stale_and_no_window_providers() {
   pass "month-only, stale, expired-refreshable, and no-window providers"
 }
 
+test_excluded_providers_are_dropped() {
+  local home fakebin log out cfg
+  home=$(make_home excl)
+  fakebin="$TMP_ROOT/excl-bin"; log="$TMP_ROOT/excl-ssh.log"
+  make_fakes "$fakebin" "$log"
+  cfg="$home/config"; mkdir -p "$cfg"
+  printf '# noise\n\n  Claude  \n' > "$cfg/fleet-usage-exclude-providers"
+  out=$(run_usage "$home" "$fakebin" 2>&1) || fail "excluded run failed: $out"
+  assert_not_contains "$out" 'claude' "an excluded provider has no rows and no attention lines, on any host"
+  assert_contains "$out" '| local | here1 | codex |' "providers not listed stay"
+  assert_contains "$out" '- delta - read_failed:' "read failures are never excluded"
+  out=$(run_usage "$home" "$fakebin" --toon 2>&1) || fail "excluded --toon failed: $out"
+  assert_not_contains "$out" 'claude' "toon drops the excluded provider too"
+  assert_contains "$out" 'codex' "toon keeps the others"
+  rm "$cfg/fleet-usage-exclude-providers"
+  out=$(run_usage "$home" "$fakebin" 2>&1) || fail "unexcluded run failed: $out"
+  assert_contains "$out" '- local claude unmeasurable:' "an absent file keeps today's behaviour"
+  pass "excluded providers are dropped from table, toon, and attention"
+}
+
 test_markdown_table_rows_sort_and_unreachable
+test_excluded_providers_are_dropped
 test_one_connection_per_host_with_batch_mode
 test_toon_output
 test_absent_registry_reads_only_local
