@@ -206,7 +206,7 @@ fm_timed_out() {  # <status>
 # which keeps the bound off perl's platform-dependent syscall-restart signal
 # semantics and off the drift of counting sleep intervals.
 fm_exec_timed() {  # <seconds> <grace-seconds> <command...>
-  local seconds=${1:-} grace=${2:-} value owner
+  local seconds=${1:-} grace=${2:-} value owner self
   for value in "$seconds" "$grace"; do
     case "$value" in
       '' | 0* | *[!0-9]*)
@@ -220,8 +220,14 @@ fm_exec_timed() {  # <seconds> <grace-seconds> <command...>
     echo "fm_exec_timed: usage: fm_exec_timed <positive-seconds> <positive-grace-seconds> <command> [args...]" >&2
     exit 125
   fi
+  # Bash 3.2 (stock macOS) has no BASHPID, and $$ names the script's main shell
+  # even inside a subshell. A child's PPID is the real pid of the shell that
+  # forked it, so exec a throwaway sh from this frame to recover it: from a
+  # subshell it differs from $$ (the owner stays the script), from the main
+  # shell it equals $$ (the owner becomes the shell's parent), as on Bash 4+.
+  self=${BASHPID:-$(exec sh -c 'printf "%s\n" "$PPID"')}
   owner=${FM_EXEC_TIMED_OWNER_PID:-$$}
-  [ "$owner" != "$BASHPID" ] || owner=$PPID
+  [ "$owner" != "$self" ] || owner=$PPID
   unset FM_EXEC_TIMED_OWNER_PID
   if command -v perl >/dev/null 2>&1; then
     exec perl -MPOSIX=WNOHANG,setpgid -MTime::HiRes=time -e '

@@ -13,6 +13,7 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-timeout-lib)
+FM_TEST_ORIGINAL_PATH=$PATH
 
 # A PATH with perl and the shell tools the bounded commands use, and no
 # timeout variant: fm_exec_timed must take its perl watchdog here.
@@ -327,6 +328,139 @@ test_run_timed_passes_a_natural_exit_through_a_fired_bound() {
   pass 'fm_run_timed passes a natural exit through when the bound fired after completion'
 }
 
+# Stock macOS ships bash 3.2, which has no BASHPID. fm_exec_timed must keep its
+# bash 4+ meaning there: the owner is the real calling process, not the
+# script's main shell reported by $$. These cases run the production library
+# under /bin/bash when that is a pre-4 bash, and say so when it is not.
+OLD_BASH=/bin/bash
+old_bash_available() {
+  [ -x "$OLD_BASH" ] || return 1
+  [ "$("$OLD_BASH" -c 'printf %s "${BASH_VERSINFO[0]}"' 2>/dev/null)" -lt 4 ] 2>/dev/null
+}
+
+skip_without_old_bash() {  # <what>; returns 0 after printing the skip
+  old_bash_available || { pass "$1 (skipped: $OLD_BASH is not a bash older than 4 on this host)"; return 0; }
+  return 1
+}
+
+# Wait until <pid> is gone or <seconds> pass; returns 0 when it is gone.
+wait_for_exit() {  # <pid> <seconds>
+  local pid=$1 limit=$2 started=$SECONDS
+  while kill -0 "$pid" 2>/dev/null; do
+    [ "$((SECONDS - started))" -lt "$limit" ] || return 1
+    sleep 0.05
+  done
+  return 0
+}
+
+test_old_bash_runs_a_bounded_command_from_the_main_shell_and_a_subshell() {
+  skip_without_old_bash "fm_exec_timed on bash 3.2 from the main shell and a subshell" && return 0
+  local out rc
+  rc=0
+  out=$("$OLD_BASH" -c 'set -u; . "$1/bin/fm-timeout-lib.sh"; fm_exec_timed 5 1 bash -c "echo main; exit 3"' _ "$ROOT" 2>&1) || rc=$?
+  [ "$rc" -eq 3 ] || fail "the main-shell call under $OLD_BASH did not pass the command status through (rc=$rc: $out)"
+  [ "$out" = main ] || fail "the main-shell call under $OLD_BASH lost the command output: $out"
+  rc=0
+  out=$("$OLD_BASH" -c 'set -u; . "$1/bin/fm-timeout-lib.sh"; ( fm_exec_timed 5 1 bash -c "echo sub; exit 4" )' _ "$ROOT" 2>&1) || rc=$?
+  [ "$rc" -eq 4 ] || fail "the subshell call under $OLD_BASH did not pass the command status through (rc=$rc: $out)"
+  [ "$out" = sub ] || fail "the subshell call under $OLD_BASH lost the command output: $out"
+  pass "fm_exec_timed runs a bounded command on bash 3.2 from the main shell and from a subshell"
+}
+
+# The owner from a subshell is the script, not the subshell's parent. The
+# intermediate subshell keeps the watchdog's parent alive after the script is
+# KILLed, so only the owner check can notice the script is gone; an owner of
+# the script's own parent (alive here) would leave the command running.
+test_old_bash_subshell_owner_is_the_script() {
+  skip_without_old_bash "fm_exec_timed on bash 3.2 tracks the script as a subshell's owner" && return 0
+  local dir script cmd
+  dir="$TMP_ROOT/old-bash-owner"
+  mkdir -p "$dir"
+  rm -f "$dir/pid" "$dir/script"
+  # shellcheck disable=SC2016
+  "$OLD_BASH" -c '
+    set -u
+    . "$1/bin/fm-timeout-lib.sh"
+    echo "$$" > "$2/script"
+    ( ( fm_exec_timed 120 1 bash -c "echo \$\$ > \"\$1\"; exec sleep 300" _ "$2/pid" ); true ) >/dev/null 2>&1 &
+    wait
+  ' _ "$ROOT" "$dir" 2>/dev/null &
+  disown $! 2>/dev/null || true
+  wait_for_file "$dir/pid"
+  script=$(cat "$dir/script")
+  cmd=$(cat "$dir/pid")
+  sleep 1
+  kill -0 "$cmd" 2>/dev/null || fail "the bounded command ended while its owning script was still alive"
+  kill -KILL "$script" 2>/dev/null || true
+  if ! wait_for_exit "$cmd" 15; then
+    kill -KILL "$cmd" 2>/dev/null || true
+    fail "the bounded command outlived the script that owned it"
+  fi
+  pass "fm_exec_timed on bash 3.2 ends the command when the owning script dies, not only when its parent does"
+}
+
+# From the main shell the owner is that shell's parent.
+test_old_bash_main_shell_owner_is_the_parent() {
+  skip_without_old_bash "fm_exec_timed on bash 3.2 tracks the parent as the main shell's owner" && return 0
+  local dir parent cmd
+  dir="$TMP_ROOT/old-bash-main-owner"
+  mkdir -p "$dir"
+  rm -f "$dir/pid" "$dir/parent"
+  # shellcheck disable=SC2016
+  "$OLD_BASH" -c '
+    echo "$$" > "$2/parent"
+    "$3" -c '"'"'set -u; . "$1/bin/fm-timeout-lib.sh"; fm_exec_timed 120 1 bash -c "echo \$\$ > \"\$1\"; exec sleep 300" _ "$2/pid"'"'"' _ "$1" "$2" >/dev/null 2>&1
+    true
+  ' _ "$ROOT" "$dir" "$OLD_BASH" 2>/dev/null &
+  disown $! 2>/dev/null || true
+  wait_for_file "$dir/pid"
+  parent=$(cat "$dir/parent")
+  cmd=$(cat "$dir/pid")
+  sleep 1
+  kill -0 "$cmd" 2>/dev/null || fail "the bounded command ended while the shell's parent was still alive"
+  kill -KILL "$parent" 2>/dev/null || true
+  if ! wait_for_exit "$cmd" 15; then
+    kill -KILL "$cmd" 2>/dev/null || true
+    fail "the bounded command outlived the parent of the shell it replaced"
+  fi
+  pass "fm_exec_timed on bash 3.2 ends the command when the replaced shell's parent dies"
+}
+
+# A spawn-style backlog move: fm_backlog_start runs tasks-axi through
+# fm_tasks_axi and fm_exec_timed inside a command substitution, which is how
+# bin/fm-spawn.sh and bin/fm-teardown.sh reach it with FM_TASKS_AXI_TIMEOUT set.
+test_old_bash_backlog_transition_runs_tasks_axi_under_a_bound() {
+  skip_without_old_bash "a bounded backlog transition on bash 3.2" && return 0
+  local dir fake out rc
+  dir="$TMP_ROOT/old-bash-backlog"
+  fake="$dir/bin"
+  mkdir -p "$fake" "$dir/data"
+  printf '# Backlog\n\n## In flight\n' > "$dir/data/backlog.md"
+  cat > "$fake/tasks-axi" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >> "$FM_TEST_TASKS_AXI_LOG"
+case "$FM_TEST_TASKS_AXI_MODE" in
+  hang) exec sleep 300 ;;
+esac
+exit 0
+SH
+  chmod +x "$fake/tasks-axi"
+  rc=0
+  out=$(PATH="$fake:$FM_TEST_ORIGINAL_PATH" FM_TEST_TASKS_AXI_LOG="$dir/log" FM_TEST_TASKS_AXI_MODE=ok FM_TASKS_AXI_TIMEOUT=10 \
+    "$OLD_BASH" -c 'set -u; . "$1/bin/fm-tasks-axi-lib.sh"; . "$1/bin/fm-backlog-transition-lib.sh"
+      fm_backlog_start "$2" t1; status=$?; printf "err=%s\n" "$FM_BACKLOG_TRANSITION_ERROR"; exit "$status"' _ "$ROOT" "$dir/data" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || fail "the backlog move to In flight failed under $OLD_BASH (rc=$rc: $out)"
+  assert_not_contains "$out" "BASHPID" "the move still tripped over BASHPID"
+  assert_contains "$(cat "$dir/log")" "start t1" "tasks-axi was never asked to start the item"
+  rc=0
+  out=$(PATH="$fake:$FM_TEST_ORIGINAL_PATH" FM_TEST_TASKS_AXI_LOG="$dir/log" FM_TEST_TASKS_AXI_MODE=hang FM_TASKS_AXI_TIMEOUT=1 \
+    "$OLD_BASH" -c 'set -u; . "$1/bin/fm-tasks-axi-lib.sh"; . "$1/bin/fm-backlog-transition-lib.sh"
+      fm_backlog_start "$2" t2; status=$?; printf "err=%s\n" "$FM_BACKLOG_TRANSITION_ERROR"; exit "$status"' _ "$ROOT" "$dir/data" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a hung tasks-axi was not bounded under $OLD_BASH"
+  assert_contains "$out" "did not finish within 1s" "the bound expiry was not reported for the hung tasks-axi"
+  pass "a backlog transition bounds tasks-axi on bash 3.2 and reports an expired bound"
+}
+
 test_passes_the_command_status_and_output_through
 test_run_timed_reports_the_bound_when_the_wrapper_records_a_signal_death
 test_run_timed_passes_a_natural_exit_through_a_fired_bound
@@ -342,3 +476,7 @@ test_refuses_rather_than_running_unbounded
 test_rejects_malformed_bounds_before_running_anything
 test_gnu_timeout_kills_a_term_ignoring_command_after_the_grace
 test_timed_out_names_exactly_the_bound_statuses
+test_old_bash_runs_a_bounded_command_from_the_main_shell_and_a_subshell
+test_old_bash_subshell_owner_is_the_script
+test_old_bash_main_shell_owner_is_the_parent
+test_old_bash_backlog_transition_runs_tasks_axi_under_a_bound
