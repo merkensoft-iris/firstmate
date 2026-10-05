@@ -657,6 +657,19 @@ assert_grep 'report=data/remote-secondmates/ios/data/reply/writefail.md' "$PAREN
 mirrored_cursor_is_current "the recovered delta did not advance the cursor"
 pass "a failed mirror write never drops status content or advances the cursor"
 
+# The whole-log recapture re-fetches every document the log offers, one remote
+# job at a time, so it needs far more than one await_reply_result budget on a
+# loaded runner. Each attempt is a full wait that re-checks ownership of the
+# source, so the recapture is bounded by RECAPTURE_WAIT_ATTEMPTS of them.
+RECAPTURE_WAIT_ATTEMPTS=3
+await_recapture_result() { # <result-path>
+  local attempt
+  for attempt in $(seq 1 "$RECAPTURE_WAIT_ATTEMPTS"); do
+    await_reply_result "$1" && return 0
+  done
+  return 1
+}
+
 # A source line remains the replay identity even when document availability
 # changes between a successful mirror append and a failed ingestion commit.
 REPLAY_LINE='needs-decision [key=replay-decision]: pick report=data/reply/replay.md'
@@ -703,7 +716,7 @@ assert_not_contains "$(status_open_decisions "$PARENT/state/ios.status")" $'repl
 stop_reply_listener || fail "the reply listener did not stop before the cursor-loss recapture"
 rm -f "$PARENT/state/remote-replies/ios.cursor"
 GEN=$((GEN + 1))
-await_reply_result "$PARENT/state/procevent-inbox/$SID.$GEN.result" \
+await_recapture_result "$PARENT/state/procevent-inbox/$SID.$GEN.result" \
   || fail "the replay-identity whole-log recapture was not captured"
 assert_present "$PARENT/state/procevent-inbox/$SID.$GEN.handled" \
   "the replay-identity whole-log recapture was not applied"
@@ -967,7 +980,7 @@ mv "$PARENT/state/.wake-queue" "$TMP_ROOT/wake-queue-before-replay" 2>/dev/null 
 stop_reply_listener || fail "the reply listener did not stop before the whole-log recapture"
 rm -f "$PARENT/state/remote-replies/ios.cursor"
 GEN=$((GEN + 1))
-await_reply_result "$PARENT/state/procevent-inbox/$SID.$GEN.result" \
+await_recapture_result "$PARENT/state/procevent-inbox/$SID.$GEN.result" \
   || fail "the cursor-loss recapture was not captured"
 assert_present "$PARENT/state/procevent-inbox/$SID.$GEN.handled" \
   "the whole-log recapture was not acknowledged by the adapter"
