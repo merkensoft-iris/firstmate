@@ -636,6 +636,7 @@ Changed live routes receive a marked instruction to re-read the transferred file
 The primary records that remote nudge before delivery and retries it during locked startup convergence after a failed send.
 Local secondmates retain their generation-specific local pointer contract.
 Remote transfers do not copy those primary-local instruction paths.
+When the host's older code root does not declare an item the primary offers, the sender warns, skips only that item, and continues, so a relaunch is not refused over version skew; [`bin/fm-config-inherit-lib.sh`](../bin/fm-config-inherit-lib.sh) owns that contract.
 
 ### Relaunch a live remote second mate
 
