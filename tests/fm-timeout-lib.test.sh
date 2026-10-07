@@ -19,7 +19,7 @@ FM_TEST_ORIGINAL_PATH=$PATH
 # timeout variant: fm_exec_timed must take its perl watchdog here.
 PERL_ONLY="$TMP_ROOT/perl-only-bin"
 mkdir -p "$PERL_ONLY"
-for tool in perl bash sleep; do
+for tool in perl bash sh sleep; do
   ln -s "$(command -v "$tool")" "$PERL_ONLY/$tool"
 done
 
