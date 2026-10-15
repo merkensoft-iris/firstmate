@@ -1230,6 +1230,87 @@ test_out_of_band_close_is_recordable() {
   pass "an out-of-band close is recordable with the captain's word and nothing else"
 }
 
+# Done rows past the markdown backlog's retention move into the done archive,
+# where tasks-axi show no longer finds them. An answered call that was archived
+# is still settled, so the completion gate must keep seeing it there.
+test_answered_and_archived_call_satisfies_the_gate() {
+  local home id
+  home=$(make_home archived-answered)
+  id=sample-archive-review
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate the sample archive" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the archived-answer origin"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Sample archive review\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  # An older, unanswered row with the same id archived first: the newest
+  # archived row is the call the inventory names.
+  tasks_in "$home" add sample-archive-call "An older row reusing the id" --kind ship --repo sample >/dev/null \
+    || fail "could not create the older namesake row"
+  tasks_in "$home" "done" sample-archive-call --keep 0 >/dev/null \
+    || fail "could not archive the older namesake row"
+  run_captain "$home" hold sample-archive-call --title "Choose the archive option" \
+    --reason "captain archive choice pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not register the captain-held task"
+  run_captain "$home" complete "$id" sample-archive-call >/dev/null \
+    || fail "completion failed for the held inventory"
+  printf 'Captain chose the archive option.\n' > "$home/archive-answer.txt"
+  run_captain "$home" answer sample-archive-call --decision-file "$home/archive-answer.txt" >/dev/null \
+    || fail "answer could not close the captain-held task"
+  tasks_in "$home" prune --keep 0 >/dev/null || fail "could not archive the answered call"
+  assert_no_grep "sample-archive-call" "$home/data/backlog.md" \
+    "the answered call was not pruned out of the live backlog"
+  [ "$(grep -c '^- \[x\] sample-archive-call ' "$home/data/done-archive.md")" = 2 ] \
+    || fail "the done archive does not carry both rows reusing the id"
+
+  run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err" \
+    || fail "an answered and archived call failed verification: $(cat "$home/verify.err")"
+  run_captain "$home" complete "$id" sample-archive-call > "$home/complete.out" 2> "$home/complete.err" \
+    || fail "an answered and archived call failed completion: $(cat "$home/complete.err")"
+  pass "an answered call pruned into the done archive still satisfies the completion gate"
+}
+
+# The other half of the same distinction: an archived call with no recorded
+# answer is not settled, and no live row reachable through the legacy
+# identity may stand in for the archived one.
+test_archived_call_without_an_answer_fails_the_gate() {
+  local home id
+  home=$(make_home archived-unanswered)
+  id=sample-unsettled-review
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Investigate the unsettled sample" --kind scout --repo sample --start >/dev/null \
+    || fail "could not create the archived-unanswered origin"
+  write_origin_meta "$home" "$id"
+  printf 'done: report complete\n' > "$home/state/$id.status"
+  printf '# Unsettled sample review\n\nOne captain choice remains.\n' > "$home/data/$id/report.md"
+  run_captain "$home" hold sample-unsettled-call --title "Choose the unsettled option" \
+    --reason "captain unsettled choice pending" --repo sample --origin "$id" >/dev/null \
+    || fail "could not register the captain-held task"
+  run_captain "$home" complete "$id" sample-unsettled-call >/dev/null \
+    || fail "completion failed before the out-of-band close"
+  tasks_in "$home" "done" sample-unsettled-call --keep 0 >/dev/null \
+    || fail "could not close and archive the call without an answer"
+  assert_no_grep "sample-unsettled-call" "$home/data/backlog.md" \
+    "the unanswered call was not pruned out of the live backlog"
+  assert_grep "sample-unsettled-call" "$home/data/done-archive.md" \
+    "the unanswered call did not reach the done archive"
+  run_captain "$home" hold "$id-decision-sample-unsettled-call" --title "A legacy-named namesake" \
+    --reason "an unrelated live hold" --repo sample --origin "$id" >/dev/null \
+    || fail "could not create the live legacy-named row"
+
+  if run_captain "$home" verify "$id" > "$home/verify.out" 2> "$home/verify.err"; then
+    fail "verification passed an archived call with no recorded captain answer"
+  fi
+  assert_grep "archived without a recorded captain answer" "$home/verify.err" \
+    "the refusal must say the archived call carries no captain answer"
+  if run_captain "$home" complete "$id" sample-unsettled-call > "$home/complete.out" 2> "$home/complete.err"; then
+    fail "completion accepted an archived call with no recorded captain answer"
+  fi
+  assert_grep "archived without a recorded captain answer" "$home/complete.err" \
+    "the completion refusal must say the archived call carries no captain answer"
+  pass "an archived call with no recorded answer still fails the completion gate"
+}
+
 # A post-teardown visual review completes against the surviving report and
 # durable tasks, with no volatile task metadata and no second decision database.
 test_visual_review_uses_shared_completion_owner() {
@@ -4645,6 +4726,8 @@ test_hold_stamp_precedes_hold_visibility
 test_interrupted_answer_preserves_hold_age
 test_deferral_leaves_captains_call_until_due
 test_out_of_band_close_is_recordable
+test_answered_and_archived_call_satisfies_the_gate
+test_archived_call_without_an_answer_fails_the_gate
 test_visual_review_uses_shared_completion_owner
 test_none_inventory_and_resolved_prose_do_not_create_holds
 test_terminal_single_owner_status_decision_does_not_block_empty_inventory

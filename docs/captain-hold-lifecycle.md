@@ -108,6 +108,8 @@ A post-teardown visual review can complete against the surviving report and dura
 `complete` accepts `--none` as an explicit semantic inventory result.
 `--none` is refused while the origin still has a lifecycle-open keyed status decision.
 Before recording completion, `complete` verifies every listed task against tasks-axi.
+On a markdown backend, a listed task already pruned out of the live backlog is read from its newest row in `data/done-archive.md`, before any legacy-identity fallback could substitute a different row.
+An archived row is closed, so it passes only when it carries a recorded resolution; an archived call with no recorded answer is refused as unsettled.
 The origin is never its own inventory entry, so a hold that failed cannot be vouched for by the origin row.
 For a historical inventory that names its own origin, hold a separate captain task with `--origin`, replace only the invalid entry in the final `decision_keys=` line of the origin metadata with that task id while preserving all other entries, and re-run `complete`.
 An entry whose recorded origin differs from the one being completed is refused.

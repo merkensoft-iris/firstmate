@@ -144,8 +144,11 @@
 # alone and named in the output,
 # the inventory is unioned idempotently into the metadata, and every still-open
 # keyed status decision is transferred to its durable owner with a
-# `captain-held [key=...]` status close naming the inventory. Later review
-# passes may add ids. A post-teardown visual review can complete against the
+# `captain-held [key=...]` status close naming the inventory. On a markdown
+# backend an entry the live backlog no longer carries is read from the newest
+# row for it in data/done-archive.md, before any legacy fallback; an archived
+# row is Done, so it satisfies the gate only with a recorded resolution and an
+# archived call nobody answered is refused. Later review passes may add ids. A post-teardown visual review can complete against the
 # surviving report and tasks without recreating task state.
 # `verify` is read-only and is called by scout teardown, so teardown cannot
 # erase a source before this gate has succeeded: every recorded inventory
@@ -521,17 +524,82 @@ resolution_block() {  # <mode>
     "$DECISION_DIGEST" "$1" "$label" "$DECISION_TEXT"
 }
 
+# A markdown backlog moves Done rows past its retention into
+# data/done-archive.md, where `tasks-axi show` no longer finds them, so an
+# answered call that was archived would otherwise read as absent. Read the
+# NEWEST archived row carrying <id> - archive sections are appended, and a
+# reused id can appear more than once - through tasks-axi itself, from a
+# private one-row copy whose `## Archived` header reads as `## Done`. Only the
+# completion gate consults this, and only after the live backlog missed: a live
+# row always wins, and an archived row is Done, so it passes only with a
+# recorded resolution. A non-markdown backend keeps closed rows readable and
+# has no archive here. Returns non-zero when no archived row carries <id>; a
+# read-bound hit stops the command as task_show does.
+task_show_archived() {  # <id>; sets TASK_SHOW_OUTPUT
+  local id=$1 data root backend archive stage status=0 reason
+  data=$(fm_backlog_data_absolute "$DATA") || fail "data directory cannot be resolved: $DATA"
+  root=$(fm_backlog_root "$data") || fail "$FM_BACKLOG_TRANSITION_ERROR"
+  backend=$(fm_tasks_axi_backend "$root") || return 2
+  [ "$backend" = markdown ] || return 1
+  archive="$data/done-archive.md"
+  [ -f "$archive" ] || return 1
+  stage=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/fm-captain-hold-archive.XXXXXX") \
+    || fail "cannot stage the archived row of $id"
+  if ! { mkdir "$stage/data" \
+    && printf '%s\n' 'backend = "markdown"' '' '[markdown]' 'path = "data/backlog.md"' \
+      > "$stage/.tasks.toml" \
+    && printf '## Done\n\n' > "$stage/data/backlog.md" \
+    && awk -v id="$id" '
+      function flush() { if (row != "") newest = row; row = ""; inside = 0 }
+      /^- \[.\] / {
+        flush()
+        rest = substr($0, 7)
+        cut = index(rest, " ")
+        if ((cut ? substr(rest, 1, cut - 1) : rest) == id) { inside = 1; row = $0 "\n" }
+        next
+      }
+      inside && (/^[ \t]/ || /^$/) { row = row $0 "\n"; next }
+      { flush() }
+      END { flush(); printf "%s", newest }
+    ' "$archive" >> "$stage/data/backlog.md"; }; then
+    rm -rf -- "$stage"
+    fail "cannot stage the archived row of $id"
+  fi
+  if ! grep -q '^- \[' "$stage/data/backlog.md"; then
+    rm -rf -- "$stage"
+    return 1
+  fi
+  TASK_SHOW_OUTPUT=$(fm_backlog_row_show "$stage/data" "$id" --full 2>/dev/null) || status=$?
+  rm -rf -- "$stage"
+  if [ "$status" -eq 124 ]; then
+    reason=${TASK_SHOW_OUTPUT%%$'\n'*}
+    printf 'fm-captain-hold: %s\n' \
+      "${reason:-tasks-axi show $id exceeded its backlog read bound}" >&2
+    exit 124
+  fi
+  [ "$status" -eq 0 ] || fail "the archived row of $id in $archive could not be read"
+}
+
 # Durable state of one captain call: an active captain hold (annotations
 # surviving even when a date gate has expired) or a recorded captain answer.
+# A row already pruned into the done archive is consulted only when the live
+# backlog has none; it is Done, so only its recorded resolution settles it.
 verify_hold_durable() {  # <task-id>
-  local id=$1 show state hold_kind body
-  task_show "$id" || fail "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
+  local id=$1 show state hold_kind body archived=0
+  if ! task_show "$id"; then
+    task_show_archived "$id" \
+      || fail "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
+    archived=1
+  fi
   show=$TASK_SHOW_OUTPUT
   state=$(show_field "$show" state)
   hold_kind=$(show_field_value "$show" hold_kind)
   body=$(show_field "$show" body)
   if body_has_resolution_record "$body"; then
     return 0
+  fi
+  if [ "$archived" = 1 ]; then
+    fail "captain-held task $id was archived without a recorded captain answer, so its call is not settled; hold it again with hold $id --title <title> --reason <reason>, then record the captain's words with answer"
   fi
   if [ "$state" != "done" ] && [ "$hold_kind" = captain ]; then
     return 0
@@ -734,18 +802,32 @@ resolve_migrated_entry() {  # <origin-or-empty> <entry>
 # Resolve one inventory entry or channel key to the task that carries it: the
 # exact task id when it exists, else the legacy derived identity, else - on the
 # beads backend - the migrated row the markdown-to-beads hold migration wrote.
-# Prints "<resolved id> <how>", where <how> is exact, legacy, migrated-note or
-# migrated-prefix, so a caller can record which evidence carried the attestation.
-resolve_entry() {  # <origin-or-empty> <entry>; prints "<id> <how>" or fails
-  local origin=$1 entry=$2 legacy migrated rc
+# With --archive, which only the completion gate passes, each identity on a
+# markdown backend is also looked up in the done archive once the live backlog
+# misses it; the keyed-answer intake cannot write to an archived row, so it
+# never asks. Prints "<resolved id> <how>", where <how> is
+# exact, archived, legacy, legacy-archived, migrated-note or migrated-prefix,
+# so a caller can record which evidence carried the attestation.
+resolve_entry() {  # <origin-or-empty> <entry> [--archive]; prints "<id> <how>" or fails
+  local origin=$1 entry=$2 archive=${3:-} legacy migrated rc
   if task_show "$entry"; then
     printf '%s exact' "$entry"
+    return 0
+  fi
+  # An exact id already pruned into the done archive is still that task: it
+  # resolves here, before any fallback could substitute a different live row.
+  if [ "$archive" = --archive ] && task_show_archived "$entry"; then
+    printf '%s archived' "$entry"
     return 0
   fi
   if [ -n "$origin" ] && [ "$origin" != "$BINDING_ANY" ]; then
     legacy=$(legacy_hold_id "$origin" "$entry")
     if task_show "$legacy"; then
       printf '%s legacy' "$legacy"
+      return 0
+    fi
+    if [ "$archive" = --archive ] && task_show_archived "$legacy"; then
+      printf '%s legacy-archived' "$legacy"
       return 0
     fi
   fi
@@ -871,7 +953,7 @@ verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origi
   if [ -n "$origin" ] && [ "$origin" != "$BINDING_ANY" ] && [ "$entry" = "$origin" ]; then
     refuse_self_inventory "$origin" "$entry"
   fi
-  resolved=$(resolve_entry "$origin" "$entry") || resolve_status=$?
+  resolved=$(resolve_entry "$origin" "$entry" --archive) || resolve_status=$?
   if [ "$resolve_status" -ne 0 ]; then
     [ "$resolve_status" -ne 124 ] \
       || fail "the backlog backend exceeded its read bound resolving $entry"
