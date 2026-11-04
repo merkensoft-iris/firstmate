@@ -126,6 +126,7 @@ A durable entry is an open task with captain-hold annotations (including a date-
 For an open task without those annotations, a leading hold-set stamp above the resolution is refused: the answer alone cannot establish durability while the hold or release normalization is incomplete.
 A Done task still requires a recorded resolution, but is not subject to that stamp refusal.
 An answered entry that markdown Done retention moved into the configured Done archive still counts, while an archived close with no recorded answer does not.
+An exact entry pruned into that archive is read from its newest archived row before any legacy-identity fallback, so a different live row never stands in for it.
 The origin is never its own inventory entry, so a hold that failed cannot be vouched for by the origin row.
 For a historical inventory that names its own origin, hold a separate captain task with `--origin`, replace only the invalid entry in the final `decision_keys=` line of the origin metadata with that task id while preserving all other entries, and re-run `complete`.
 An entry whose recorded origin differs from the one being completed is refused, comparing backend identities rather than alias spellings.

@@ -545,7 +545,7 @@ resolution_block() {  # <mode>
 # cannot vouch for that state. Done tasks retain their recorded resolution as
 # evidence, and verify_entry_durable separately checks the stored origin.
 verify_hold_durable() {  # <task-id>
-  local id=$1 show state hold_kind body archived_status
+  local id=$1 show state hold_kind body archived_status archived=0
   task_show "$id" || {
     [ "$?" -ne 124 ] || fail "the backlog backend exceeded its read bound reading $id"
     task_show_archived "$id" || {
@@ -553,6 +553,7 @@ verify_hold_durable() {  # <task-id>
       [ "$archived_status" -ne 124 ] || exit 124
       fail "captain-held task $id is absent from this home's configured backlog (data directory $DATA)"
     }
+    archived=1
   }
   show=$TASK_SHOW_OUTPUT
   state=$(show_field "$show" state)
@@ -567,6 +568,9 @@ verify_hold_durable() {  # <task-id>
       fail "captain-held task $id carries a recorded answer from an earlier call, but its newer hold never completed; re-run the hold or answer it again"
     fi
     return 0
+  fi
+  if [ "$archived" = 1 ]; then
+    fail "captain-held task $id was archived without a recorded captain answer, so its call is not settled; hold it again with hold $id --title <title> --reason <reason>, then record the captain's words with answer"
   fi
   fail "captain-held task $id is neither held for the captain nor closed with a recorded captain answer"
 }
@@ -1031,15 +1035,24 @@ archived_entry() {  # <origin-or-empty> <entry>; prints the archived id
 # as absence. The result carries the attestation evidence and whether an
 # origin was recorded, so completion can disclose the legacy fallback.
 verify_entry_durable() {  # <origin-or-empty> <entry>; prints "<id> <how> <origin-state>"
-  local origin=$1 entry=$2 resolved resolve_status=0 id how stored origin_state=unrecorded origin_id stored_id resolve_err archived archived_status
+  local origin=$1 entry=$2 resolved='' resolve_status=0 id how stored origin_state=unrecorded origin_id stored_id resolve_err archived archived_status
   # The origin task is never its own captain-call inventory: it is the work the
   # calls were found in, so accepting it would let a refused hold look recorded.
   if [ -n "$origin" ] && [ "$origin" != "$BINDING_ANY" ] && [ "$entry" = "$origin" ]; then
     refuse_self_inventory "$origin" "$entry"
   fi
+  # An exact entry that markdown Done retention pruned out of the live backlog
+  # is that call: read its archived row before any legacy-identity fallback
+  # could let a different live row stand in for it.
+  if ! task_show "$entry"; then
+    archived_status=0
+    task_show_archived "$entry" || archived_status=$?
+    [ "$archived_status" -ne 124 ] || exit 124
+    [ "$archived_status" -ne 0 ] || resolved="$entry archived"
+  fi
   resolve_err=$(mktemp "${TMPDIR:-/tmp}/fm-captain-hold-resolve.XXXXXX") \
     || fail "cannot stage the resolution diagnostics for $entry"
-  resolved=$(resolve_entry "$origin" "$entry" 2>"$resolve_err") || resolve_status=$?
+  [ -n "$resolved" ] || resolved=$(resolve_entry "$origin" "$entry" 2>"$resolve_err") || resolve_status=$?
   if [ "$resolve_status" -eq 1 ]; then
     archived_status=0
     archived=$(archived_entry "$origin" "$entry") || archived_status=$?
