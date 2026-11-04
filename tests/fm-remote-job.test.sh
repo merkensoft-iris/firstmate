@@ -1244,10 +1244,11 @@ quiet_measure() { # <label> <max-sleeps>
   sleeps=$(grep -cx sleep "$QUIET_EXEC_LOG" || true)
   [ "$sleeps" -le "$2" ] \
     || fail "$1 kept polling with sleep ($sleeps sleeps in 4s)"
-  # Allow the independent heartbeat's bounded ownership checks as well as
-  # sweeps at either edge of the window; the sleep limit still rejects fast
-  # queue polling independently of this external-command budget.
-  [ "$execs" -le 120 ] \
+  # Allow the independent heartbeat's bounded ownership checks, the serving
+  # loop's own per-turn lock-ownership checks, and sweeps at either edge of the
+  # window; the sleep limit still rejects fast queue polling independently of
+  # this external-command budget.
+  [ "$execs" -le 140 ] \
     || fail "$1 ran $execs commands in 4s; expected only heartbeats and sweeps"$'\n'"$(sort "$QUIET_EXEC_LOG" | uniq -c)"
 }
 # fm_remote_job_probe must keep reading an idle worker as ready: its heartbeat
