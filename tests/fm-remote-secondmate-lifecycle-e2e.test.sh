@@ -1483,7 +1483,23 @@ FM_FAKE_SSH_MODE=unreachable FM_STATE_OVERRIDE="$WATCH_STATE_UNREACHABLE" \
   remote_env exec "$ROOT/bin/fm-watch.sh" \
   > "$TMP_ROOT/watch-unreachable.out" 2> "$TMP_ROOT/watch-unreachable.err" &
 watch_pid=$!
-sleep 4
+i=0
+processed=0
+while [ "$i" -lt 80 ]; do
+  kill -0 "$watch_pid" 2>/dev/null \
+    || fail "the watcher exited against an unreachable remote secondmate: $(cat "$TMP_ROOT/watch-unreachable.out" "$TMP_ROOT/watch-unreachable.err")"
+  if [ "$processed" -eq 0 ] \
+    && grep -Fq 'secondmate ios liveness:' "$WATCH_STATE_UNREACHABLE/.watch-triage.log" 2>/dev/null; then
+    processed=1
+    touch "$TMP_ROOT/watch-unreachable.processed"
+  fi
+  if [ "$processed" -eq 1 ] \
+    && [ "$WATCH_STATE_UNREACHABLE/.last-watcher-beat" -nt "$TMP_ROOT/watch-unreachable.processed" ]; then
+    break
+  fi
+  sleep 0.1
+  i=$((i + 1))
+done
 kill -0 "$watch_pid" 2>/dev/null \
   || fail "the watcher exited against an unreachable remote secondmate: $(cat "$TMP_ROOT/watch-unreachable.out" "$TMP_ROOT/watch-unreachable.err")"
 kill "$watch_pid" 2>/dev/null || true
@@ -1517,7 +1533,7 @@ pass "watch liveness: an unreachable remote secondmate is probed, preserved, and
 # the live endpoint through the accepted client.
 make_herdr_client_pair "$TMP_ROOT/client-pair" 0.7.1 14 0.7.5 16
 export FM_HERDR_PAIR_DIR="$TMP_ROOT/client-pair"
-SHADOWED_STATE=$(FM_HOME="$REMOTE_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" \
+SHADOWED_STATE=$(FM_HOME="$REMOTE_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \
   PATH="$TMP_ROOT/client-pair/stale:$REMOTE_ROOT/bin:$TMP_ROOT/client-pair/tools:/usr/bin:/bin" \
   "$REMOTE_ROOT/bin/fm-remote-secondmate-control.sh" state ios 2>"$TMP_ROOT/shadowed-state.err")
 [ "$SHADOWED_STATE" = alive ] \

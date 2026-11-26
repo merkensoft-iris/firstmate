@@ -21,11 +21,11 @@
 # sort is one per Herdr server and every home's tasks share it. Primary
 # config/trace-context is copied at the launch convergence point as part of the
 # default-off W3C trace-context setup, while live convergence leaves it unchanged.
-# The primary passes its frozen home-session decision into a newly launched
-# Secondmate; see docs/trace-context.md.
 # Primary config/lavish-axi-host carries the one per-machine Lavish server address
 # to every same-machine worker so a worker never starts a second server on another
 # interface; it is machine-local, so it never crosses to a remote host (below).
+# The primary passes its frozen home-session decision into a newly launched
+# Secondmate; see docs/trace-context.md.
 # Primary approval-mode settings follow the same inheritance rules as other
 # declared configuration.
 # Primary config/t3code-instances selects the T3 provider account for each
@@ -63,8 +63,7 @@
 #
 # Extensible by design: FM_INHERITABLE_CONFIG is the single declared list of
 # config-dir-relative items the primary propagates. Add an item there and every
-# convergence point inherits it; a value that describes one machine must also be
-# listed in FM_MACHINE_LOCAL_INHERITABLE_CONFIG below. config/secondmate-harness
+# convergence point inherits it - no other change needed. config/secondmate-harness
 # is deliberately NOT in the list: it is the primary's own setting for launching
 # secondmates, and a secondmate never spawns secondmates, so it must not flow
 # downstream.

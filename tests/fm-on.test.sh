@@ -68,7 +68,8 @@ case "\${1:-}:\${2:-}" in
 esac
 SH
 cp "$ROOT/bin/fm-remote-doctor.sh" "$ROOT/bin/fm-tasks-axi-lib.sh" \
-  "$ROOT/bin/fm-remote-herdr-owner-lib.sh" "$ROOT/bin/fm-backend.sh" \
+  "$ROOT/bin/fm-remote-herdr-owner-lib.sh" "$ROOT/bin/fm-remote-herdr-identity-lib.sh" \
+  "$ROOT/bin/fm-backend.sh" \
   "$ROOT/bin/fm-composer-lib.sh" "$ROOT/bin/fm-transition-lib.sh" \
   "$ROOT/bin/fm-agent-process-lib.sh" "$ROOT/bin/fm-session-lock-lib.sh" \
   "$ROOT/bin/fm-cursor-lib.sh" "$ROOT/bin/fm-gemini-lib.sh" "$REMOTE_ROOT/bin/"
